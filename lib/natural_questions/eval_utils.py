@@ -74,8 +74,10 @@ class Span(object):
     byte spans to -1.
 
   """
-  def __init__(self, start_byte, end_byte, start_token_idx, end_token_idx):
-
+  def __init__(self, start_byte, end_byte, start_token_idx, end_token_idx, score):
+    ## HRG TODO need to figure out how to implement score which was just tacked on
+    #  new predictions.json file format contains this
+    #  Might want to default score to None here but for now leaving it required so it will blow up if called without
     if ((start_byte < 0 and end_byte >= 0) or
         (start_byte >= 0 and end_byte < 0)):
       raise ValueError('Inconsistent Null Spans (Byte).')
@@ -95,6 +97,7 @@ class Span(object):
     self.end_byte = end_byte
     self.start_token_idx = start_token_idx
     self.end_token_idx = end_token_idx
+    self.score = score
 
   def is_null_span(self):
     """A span is a null span if the start and end are both -1."""
@@ -191,7 +194,7 @@ def gold_has_short_answer(gold_label_list):
 
 def gold_has_long_answer(gold_label_list):
   """Gets vote from multi-annotators for judging if there is a long answer."""
-
+  
   gold_has_answer = gold_label_list and (sum([
       not label.long_answer_span.is_null_span()  # long answer not null
       for label in gold_label_list               # for each annotator
@@ -210,27 +213,49 @@ def read_prediction_json(predictions_path):
     A dictionary with key = example_id, value = NQInstancePrediction.
 
   """
-  logging.info('Reading predictions from file: %s', format(predictions_path))
+  print(f"Reading predictions from file: {predictions_path}")
   with open(predictions_path, 'r') as f:
     predictions = json.loads(f.read())
 
   nq_pred_dict = {}
   for single_prediction in predictions['predictions']:
+    # from pprint import pprint
+    # print(type(single_prediction))
+    # pprint(single_prediction)
+    # assert False
+    ## HRG - TODO
+    #  I had to change this because of new format for predictions file
+    #  I added score to Span() but we are not currently doing anything with it
+    #  Further, a single_prediction can have multiple answers in 'long_answer'
+    #  and we are blindly taking the first one and without checking if the 
+    #  better (best?) short_items are contained within said long_answer
 
-    if 'long_answer' in single_prediction:
-      long_span = Span(single_prediction['long_answer']['start_byte'],
-                       single_prediction['long_answer']['end_byte'],
-                       single_prediction['long_answer']['start_token'],
-                       single_prediction['long_answer']['end_token'])
+    if 'long_answers' in single_prediction:
+      # long_span = Span(single_prediction['long_answer']['start_byte'],
+      #                  single_prediction['long_answer']['end_byte'],
+      #                  single_prediction['long_answer']['start_token'],
+      #                  single_prediction['long_answer']['end_token'])
+      long_span = Span( -1, -1,
+                       single_prediction['long_answers']['tokens_and_score'][0][0],
+                       single_prediction['long_answers']['tokens_and_score'][0][1],
+                       single_prediction['long_answers']['tokens_and_score'][0][2])
     else:
-      long_span = Span(-1, -1, -1, -1)  # Span is null if not presented.
+      long_span = Span(-1, -1, -1, -1, -10000.0)  # Span is null if not presented.
+      long_answer_score = -10000.0
 
     short_span_list = []
+    short_answers_score = -10000.0                 # HRG TODO - Fix this, for now just taking max
     if 'short_answers' in single_prediction:
-      for short_item in single_prediction['short_answers']:
-        short_span_list.append(
-            Span(short_item['start_byte'], short_item['end_byte'],
-                 short_item['start_token'], short_item['end_token']))
+      # for short_item in single_prediction['short_answers']:
+      #   short_span_list.append(
+      #       Span(short_item['start_byte'], short_item['end_byte'],
+      #            short_item['start_token'], short_item['end_token']))
+      for short_item in single_prediction['short_answers']['tokens_and_score']:
+        short_span_list.append(Span(-1, -1,
+                                    short_item[0],      # start_token
+                                    short_item[1],      # end_token
+                                    short_item[2]))     # score
+        short_answers_score = max(short_answers_score, short_item[2])
 
     yes_no_answer = 'none'
     if 'yes_no_answer' in single_prediction:
@@ -246,8 +271,9 @@ def read_prediction_json(predictions_path):
         long_answer_span=long_span,
         short_answer_span_list=short_span_list,
         yes_no_answer=yes_no_answer,
-        long_score=single_prediction['long_answer_score'],
-        short_score=single_prediction['short_answers_score'])
+        # long_score=single_prediction['long_answer_score'],
+        long_score=long_span.score,
+        short_score=short_answers_score)            ## HRG Using max of all short answer scores
 
     nq_pred_dict[single_prediction['example_id']] = pred_item
 
@@ -269,7 +295,7 @@ def read_annotation_from_one_split(gzipped_input_file):
 
   annotation_dict = {}
 
-  if fileisgz:
+  if fileisgz:                  # HRG For now file is not gz so this block is how it used to be
     logging.info('parsing %s ..... ', gzipped_input_file.name)
     with GzipFile(fileobj=gzipped_input_file, mode='rb') as input_file:
       for line in input_file:
@@ -303,11 +329,11 @@ def read_annotation_from_one_split(gzipped_input_file):
 
           annotation_list.append(gold_label)
         annotation_dict[example_id] = annotation_list
-  else:
+  else:                         # HRG this block has the update code
     ## HRG Changes to accept the simplified json training file
     #  Had to take out fields start_byte, end_byte and 
     #  replace with -w to indicate Span defined by token
-    logging.info('parsing %s ..... ', input_file.name)
+    print(f"parsing {input_file.name}")
     for line in input_file:
       json_example = json.loads(line)
       example_id = json_example['example_id']
@@ -319,13 +345,15 @@ def read_annotation_from_one_split(gzipped_input_file):
         long_span_rec = annotation['long_answer']
         long_span = Span(-1 ,-1,
                          long_span_rec['start_token'],
-                         long_span_rec['end_token'])
+                         long_span_rec['end_token'],
+                         0)                         ## HRG added this
 
         short_span_list = []
         for short_span_rec in annotation['short_answers']:
           short_span = Span(-1, -1,
                             short_span_rec['start_token'],
-                            short_span_rec['end_token'])
+                            short_span_rec['end_token'],
+                            0)                      ## HRG added this
           short_span_list.append(short_span)
 
         gold_label = NQLabel(

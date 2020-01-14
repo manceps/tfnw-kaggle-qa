@@ -120,7 +120,6 @@ else:
     FLAGS = flags.FLAGS
 
 
-
 def safe_divide(x, y):
   """Compute x / y, but return 0 if y is zero."""
   if y == 0:
@@ -129,6 +128,7 @@ def safe_divide(x, y):
     return x / y
 
 
+# Counter = 0                               ## HRG
 def score_long_answer(gold_label_list, pred_label):
   """Scores a long answer as correct or not.
 
@@ -149,6 +149,13 @@ def score_long_answer(gold_label_list, pred_label):
 
   pred_has_answer = pred_label and (
       not pred_label.long_answer_span.is_null_span())
+
+  # print(gold_label_list)                    ## HRG
+  # print(pred_label)
+  # print()
+  # global Counter
+  # Counter += 1
+  # assert Counter < 10
 
   is_correct = False
   score = pred_label.long_score
@@ -229,6 +236,7 @@ def score_answers(gold_annotation_dict, pred_dict):
   """
   gold_id_set = set(gold_annotation_dict.keys())
   pred_id_set = set(pred_dict.keys())
+
 
   if gold_id_set.symmetric_difference(pred_id_set):
     raise ValueError('ERROR: the example ids in gold annotations and example '

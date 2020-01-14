@@ -13,7 +13,7 @@ import enum
 
 #import bert_modeling as modeling
 #import bert_optimization as optimization
-#import bert_tokenization as tokenization
+import tokenization as tokenization
 
 import numpy as np
 import tensorflow as tf
